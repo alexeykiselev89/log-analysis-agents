@@ -1,0 +1,3 @@
+﻿message,frequency,criticality,recommendation
+"sql error: 0, sqlstate: <num>",2,средняя,"Проверить SQL-запросы, настроить обработку исключений, уточнить статус SQL-ошибок."
+error: duplicate key value violates unique constraint,2,высокая,"Убедиться в правильной настройке уникальных ключей, устранить дублирование записей, обновить бизнес-логику."

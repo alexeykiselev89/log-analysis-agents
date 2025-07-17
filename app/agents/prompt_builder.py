@@ -17,11 +17,14 @@ class PromptBuilder:
             '    "recommendation": "Что сделать"\n'
             "  }\n"
             "]\n\n"
-            "Логи для анализа:\n"
+            "Логи для анализа (топ 5 ошибок):\n"
         )
 
+        # 🔼 сортируем по частоте (frequency), берем только топ-5
+        top_errors = sorted(classified_errors, key=lambda x: x.frequency, reverse=True)[:5]
+
         logs_summary = ""
-        for error in classified_errors:
+        for error in top_errors:
             logs_summary += (
                 f"- Сообщение: {error.message}\n"
                 f"  Частота: {error.frequency}\n"

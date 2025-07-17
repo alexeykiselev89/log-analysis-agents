@@ -4,8 +4,9 @@ from collections import defaultdict
 from datetime import datetime
 from app.models.log_entry import LogEntry
 
+# Обновлённый шаблон: поддерживает пробел в [WARN ] и необязательные поля
 LOG_PATTERN = re.compile(
-    r'(?P<timestamp>[\d-]+\s[\d:,]+)\s\[(?P<level>[A-Z]+)\]\s\[(?P<thread>[^\]]+)\]\s(?P<class>[\w\.]+):\s(?P<message>.+)'
+    r'(?P<timestamp>[\d\-]+\s[\d:,]+)\s\[(?P<level>[A-Z ]+)\]\s\[(?P<thread>[^\]]*)\]\s(?P<class>[\w\.]+):\s(?P<message>.+)'
 )
 
 class LogParser:
@@ -15,14 +16,17 @@ class LogParser:
         for line in log_content.strip().split("\n"):
             match = LOG_PATTERN.match(line)
             if match:
-                entry = LogEntry(
-                    timestamp=datetime.strptime(match.group('timestamp'), '%Y-%m-%d %H:%M:%S,%f'),
-                    level=match.group('level'),
-                    thread=match.group('thread'),
-                    class_name=match.group('class'),
-                    message=match.group('message').strip()
-                )
-                entries.append(entry)
+                try:
+                    entry = LogEntry(
+                        timestamp=datetime.strptime(match.group('timestamp'), '%Y-%m-%d %H:%M:%S,%f'),
+                        level=match.group('level').strip(),
+                        thread=match.group('thread'),
+                        class_name=match.group('class'),
+                        message=match.group('message').strip()
+                    )
+                    entries.append(entry)
+                except Exception as e:
+                    print(f"Ошибка парсинга строки: {line} — {e}")
         return entries
 
     @staticmethod
@@ -35,8 +39,14 @@ class LogParser:
 
     @staticmethod
     def normalize_message(message: str) -> str:
-        # Удаление цифр, UUID, ID обращений и т.п. для нормализации
-        message = re.sub(r'[\d\-]{8,}', '<NUM>', message)
-        message = re.sub(r'[a-fA-F0-9\-]{36}', '<UUID>', message)
-        message = re.sub(r'(\w+Id\s?=\s?[\w-]+)', r'\1=<ID>', message)
-        return message
+        """
+        Мягкая нормализация:
+        — убираем ID, UUID, числа больше 5 цифр (таймстемпы, значения, размеры)
+        — но оставляем смысл (ключевые слова, текст ошибок)
+        """
+        message = re.sub(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', '<UUID>', message)
+        message = re.sub(r'user_id=\d+', 'user_id=<ID>', message)
+        message = re.sub(r'order_id=\d+', 'order_id=<ID>', message)
+        message = re.sub(r'\b\d{5,}\b', '<NUM>', message)
+        message = re.sub(r'\b(duration|latency|timeout)=\d+ms\b', r'\1=<MS>', message)
+        return message.lower().strip()
