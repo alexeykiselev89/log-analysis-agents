@@ -1,0 +1,5 @@
+﻿message,frequency,criticality,recommendation
+received list of 0 appeal to be pushed to notification topic.,3170,низкая,Проверить обработку пустого списка уведомлений.
+"sql error: 0, sqlstate: <num>",231,средняя,Провести аудит SQL-запросов и настроить логирование ошибок.
+"error: duplicate key value violates unique constraint ""appeals_dzo_appeal_id_organisation_id_index""",231,высокая,Убедиться в корректности настройки индекса и уникальности записей.
+hhh000010: on release of batch it still contained jdbc statements,231,низкая,Анализировать использование пула соединений и транзакций.

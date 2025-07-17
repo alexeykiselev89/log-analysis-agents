@@ -1,0 +1,6 @@
+﻿message,frequency,criticality,recommendation
+received list of 0 appeal to be pushed to notification topic.,3170,низкая,Проверить корректность настроек фильтров и источников получения списка обращений.
+"sql error: 0, sqlstate: <num>",231,средняя,Провести аудит SQL-запросов и проверить структуру запросов и индексов БД.
+"error: duplicate key value violates unique constraint ""appeals_dzo_appeal_id_organisation_id_index""",231,высокая,Добавить проверку уникальности перед добавлением записей в базу данных или настроить триггеры/валидации на уровне БД.
+hhh000010: on release of batch it still contained jdbc statements,231,низкая,"Убедиться, что работа с JDBC-батчами корректна и завершается корректно после завершения транзакций."
+запрос на получение organisation pilot,538,низкая,"Оценить необходимость и частоту выполнения данного запроса, возможно оптимизировать или кэшировать результаты."

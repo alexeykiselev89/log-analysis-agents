@@ -1,13 +1,85 @@
+
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>Отчёт по логам</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 30px;
+            background: #f9f9f9;
+        }
+        h2 {
+            color: #333;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: white;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .high {
+            color: red;
+            font-weight: bold;
+        }
+        .medium {
+            color: orange;
+        }
+        .low {
+            color: green;
+        }
+        td {
+            max-width: 500px;
+            word-wrap: break-word;
+        }
+    </style>
 </head>
 <body>
-    <h2>Результат анализа</h2>
-    <pre style="white-space:pre-wrap; word-break:break-all;">{{ json_report }}</pre>
-    <a href="{{ csv_url }}">Скачать CSV</a>
-    <br><br>
-    <a href="/">Вернуться к загрузке</a>
+    <h2>Результаты анализа логов</h2>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Сообщение</th>
+                <th>Частота</th>
+                <th>Критичность</th>
+                <th>Рекомендация</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in parsed %}
+            <tr>
+                <td>{{ item.message }}</td>
+                <td>{{ item.frequency }}</td>
+                <td>
+                    {% if item.criticality == 'высокая' %}
+                        🔴 <span class="high">высокая</span>
+                    {% elif item.criticality == 'средняя' %}
+                        🟠 <span class="medium">средняя</span>
+                    {% else %}
+                        🟢 <span class="low">низкая</span>
+                    {% endif %}
+                </td>
+                <td>{{ item.recommendation }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <br>
+    <a href="{{ csv_url }}">📥 Скачать CSV</a><br><br>
+    <a href="/">⬅ Вернуться к загрузке</a>
 </body>
 </html>

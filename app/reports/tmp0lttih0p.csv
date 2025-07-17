@@ -1,0 +1,6 @@
+﻿message,frequency,criticality,recommendation
+initializing getorganization dictionary.,379,низкая,Проверить необходимость многократной инициализации словарей.
+initializing organization dictionary.,379,низкая,Аналогичные рекомендации для ошибки №1.
+organizations dictionary initialized.,379,низкая,Не требует действий.
+произошла ошибка:,331,высокая,Провести детальную диагностику всех возможных причин возникновения ошибки.
+"sql error: 0, sqlstate: <num>",66,средняя,"Определить причину SQL ошибок и проверить права доступа, оптимизировать запросы."

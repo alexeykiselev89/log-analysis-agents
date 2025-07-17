@@ -1,0 +1,5 @@
+﻿message,frequency,criticality,recommendation
+received list of 0 appeal to be pushed to notification topic.,3170,низкая,Проверить настройки фильтров и логику формирования запросов.
+"sql error: 0, sqlstate: <num>",231,средняя,"Провести аудит SQL-запросов, проверить конфигурацию базы данных и драйверы."
+"error: duplicate key value violates unique constraint ""appeals_dzo_appeal_id_organisation_id_index""",231,высокая,"Убедиться в корректной проверке уникальности ключей, добавить ограничения уровня базы данных."
+hhh000010: on release of batch it still contained jdbc statements,231,низкая,"Настроить корректное закрытие соединений, увеличить таймаут очистки пула соединений."
