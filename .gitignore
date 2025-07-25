@@ -1,0 +1,7 @@
+
+# Игнорируемые файлы
+__pycache__/
+*.pyc
+*.csv
+debug/
+venv/
