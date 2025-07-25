@@ -10,3 +10,10 @@ venv/
 __pycache__/
 *.pyc
 venv/
+
+# Игнор временных файлов
+__pycache__/
+*.pyc
+*.csv
+debug/
+venv/
