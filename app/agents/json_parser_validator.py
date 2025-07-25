@@ -11,9 +11,7 @@ class ProblemReport(BaseModel):
     исходным текстом ошибки, чтобы его можно было отобразить в отчёте. LLM это
     поле не возвращает, поэтому оно опционально.
     """
-    # сообщение, сформулированное LLM (интерпретация)
     message: str
-    # исходная строка журнала (заполняется после парсинга)
     original_message: str | None = None
     frequency: int
     criticality: str
@@ -22,18 +20,23 @@ class ProblemReport(BaseModel):
 class JSONParserValidator:
     @staticmethod
     def clean_json_response(response: str) -> str:
+        """
+        Очищает строку от управляющих символов и markdown-обёрток,
+        затем пытается извлечь JSON-массив.
+        """
         print("----- СЫРОЙ ОТВЕТ ОТ GIGACHAT -----")
         print(response)
         print("-----------------------------------")
 
-        # Удаляем управляющие символы и Markdown
+        # Удаляем управляющие символы и markdown-код
         response = re.sub(r'[\x00-\x1F\x7F]+', '', response)
-        response = re.sub(r'```json|```', '', response)
+        response = re.sub(r'```(?:json)?', '', response)
 
-        # Ищем JSON-массив
-        match = re.search(r'\[\s*\{.*?\}\s*\]', response, re.DOTALL)
-        if match:
-            return match.group(0)
+        # Находим первую и последнюю квадратные скобки
+        start_idx = response.find('[')
+        end_idx = response.rfind(']')
+        if 0 <= start_idx < end_idx:
+            return response[start_idx:end_idx + 1]
         return ""
 
     @staticmethod
@@ -45,14 +48,16 @@ class JSONParserValidator:
                 return [ProblemReport(**item) for item in data]
             except (json.JSONDecodeError, ValidationError) as e:
                 print(f"❌ Ошибка парсинга JSON: {e}")
-                return []
-
-        # Если JSON не найден — парсим markdown вручную
+                # Продолжим попытки — возможно, формат markdown
+        # Если JSON не найден или возникла ошибка, пробуем распарсить markdown
         print("⚠️ JSON не найден — пробуем распарсить markdown-формат")
         return JSONParserValidator.parse_markdown(response)
 
     @staticmethod
     def parse_markdown(response: str) -> List[ProblemReport]:
+        """
+        Парсит markdown-ответ, если LLM по какой‑то причине не вернул валидный JSON.
+        """
         errors = []
         blocks = re.split(r'#### Ошибка №\d+:', response)
         for block in blocks[1:]:
