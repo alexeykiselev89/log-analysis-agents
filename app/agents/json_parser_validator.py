@@ -1,25 +1,41 @@
 import json
 import re
 from typing import List, Any
+
 from pydantic import BaseModel, ValidationError
 
 
 class ProblemReport(BaseModel):
-    """Модель отчёта об одной проблеме, возвращаемого LLM."""
+    """
+    Модель отчёта об одной проблеме, возвращаемого LLM.
+
+    Помимо стандартных полей добавлены опциональные `root_cause` и
+    `info_needed`, чтобы сохранять первопричину и список дополнительной
+    информации, если модель сообщает, что данных недостаточно.
+    """
+
     message: str
     original_message: str | None = None
     frequency: int
     criticality: str
     recommendation: str
+    root_cause: str | None = None
+    info_needed: str | None = None
+
+    class Config:
+        # Игнорировать лишние поля, если LLM вернёт что‑то ещё
+        extra = "ignore"
 
 
 class JSONParserValidator:
     @staticmethod
     def clean_json_response(response: str) -> str:
         """
-        Очищает строку от управляющих символов, markdown-обёрток и комментариев,
-        затем пытается извлечь JSON-массив. Комментарии (строки, начинающиеся
-        с `//`) удаляются, поскольку стандарт JSON их не допускает.
+        Очищает строку от управляющих символов, markdown‑обёрток и
+        комментариев, затем пытается извлечь JSON‑массив.
+
+        Комментарии (строки, начинающиеся с `//`) удаляются, поскольку
+        стандарт JSON их не допускает.
         """
         print("----- СЫРОЙ ОТВЕТ ОТ GIGACHAT -----")
         print(response)
@@ -42,47 +58,56 @@ class JSONParserValidator:
     def parse_and_validate(response: str) -> List[ProblemReport]:
         """
         Parses and validates the LLM response. Attempts to correct common
-        formatting issues and aggregates list-based frequency values. Falls back
+        formatting issues and aggregates list‑based frequency values. Falls back
         to markdown parsing if JSON cannot be recovered.
         """
         clean_response = JSONParserValidator.clean_json_response(response)
         if clean_response:
             try:
-                    # Decode JSON into Python objects
-                    data: List[Any] = json.loads(clean_response)
-                    normalized: List[dict[str, Any]] = []
-                    for raw_item in data:
-                        # If the item is a list (e.g., returned by LLM as [msg, freq, crit, rec]) convert to dict
-                        if not isinstance(raw_item, dict) and isinstance(raw_item, (list, tuple)):
-                            if len(raw_item) >= 4:
-                                item = {
-                                    "message": raw_item[0],
-                                    "frequency": raw_item[1],
-                                    "criticality": raw_item[2],
-                                    "recommendation": raw_item[3],
-                                }
-                            else:
-                                # Skip malformed items
-                                continue
-                        elif isinstance(raw_item, dict):
-                            item = raw_item.copy()
+                # Decode JSON into Python objects
+                data: List[Any] = json.loads(clean_response)
+                normalized: List[dict[str, Any]] = []
+                for raw_item in data:
+                    # If the item is a list (e.g., returned by LLM as
+                    # [msg, freq, crit, rec]) convert to dict
+                    if not isinstance(raw_item, dict) and isinstance(raw_item, (list, tuple)):
+                        # We expect at least 4 items: message, frequency,
+                        # criticality, recommendation. Optional positions 4 and 5
+                        # can contain root_cause and info_needed.
+                        if len(raw_item) >= 4:
+                            # Pre-fill dict
+                            item = {
+                                "message": raw_item[0],
+                                "frequency": raw_item[1],
+                                "criticality": raw_item[2],
+                                "recommendation": raw_item[3],
+                            }
+                            if len(raw_item) > 4:
+                                item["root_cause"] = raw_item[4]
+                            if len(raw_item) > 5:
+                                item["info_needed"] = raw_item[5]
                         else:
-                            # Skip unknown structures
+                            # Skip malformed items
                             continue
-                        # Flatten recommendation lists
-                        rec = item.get("recommendation")
-                        if isinstance(rec, list):
-                            item["recommendation"] = "\n".join(str(r) for r in rec)
-                        # Aggregate frequency lists
-                        freq = item.get("frequency")
-                        if isinstance(freq, list):
-                            try:
-                                numeric_values = [int(v) for v in freq if isinstance(v, (int, float, str))]
-                                item["frequency"] = sum(numeric_values) if numeric_values else len(freq)
-                            except Exception:
-                                item["frequency"] = len(freq)
-                        normalized.append(item)
-                    return [ProblemReport(**item) for item in normalized]
+                    elif isinstance(raw_item, dict):
+                        item = raw_item.copy()
+                    else:
+                        # Skip unknown structures
+                        continue
+                    # Flatten recommendation lists
+                    rec = item.get("recommendation")
+                    if isinstance(rec, list):
+                        item["recommendation"] = "\n".join(str(r) for r in rec)
+                    # Aggregate frequency lists
+                    freq = item.get("frequency")
+                    if isinstance(freq, list):
+                        try:
+                            numeric_values = [int(v) for v in freq if isinstance(v, (int, float, str))]
+                            item["frequency"] = sum(numeric_values) if numeric_values else len(freq)
+                        except Exception:
+                            item["frequency"] = len(freq)
+                    normalized.append(item)
+                return [ProblemReport(**item) for item in normalized]
             except (json.JSONDecodeError, ValidationError) as e:
                 print(f"❌ Ошибка парсинга JSON: {e}")
                 fixed = clean_response.strip()
@@ -134,7 +159,7 @@ class JSONParserValidator:
     @staticmethod
     def parse_markdown(response: str) -> List[ProblemReport]:
         """
-        Parses markdown-formatted responses when JSON cannot be extracted.
+        Parses markdown‑formatted responses when JSON cannot be extracted.
         """
         errors: List[ProblemReport] = []
         blocks = re.split(r'#### Ошибка №\d+:', response)

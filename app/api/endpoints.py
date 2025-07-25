@@ -7,57 +7,53 @@ from typing import List
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
+
 from app.agents.log_parser import LogParser
-from app.agents.error_classifier import ErrorClassifier
+from app.agents.error_classifier import ErrorClassifier, ClassifiedError
 from app.agents.prompt_builder import PromptBuilder
 from app.agents.gigachat_client import GigaChatClient
 from app.agents.json_parser_validator import JSONParserValidator, ProblemReport
 from app.agents.report_generator import ReportGenerator
 
-# Configure logging: INFO by default, enable DEBUG for more detailed output
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 
 def group_problems_by_frequency(problems: List[ProblemReport]) -> List[ProblemReport]:
     """
-    Aggregate problem reports with identical frequency values into a single
-    report. When multiple entries share the same frequency, their messages
-    and recommendations are concatenated, and the highest criticality level
-    is preserved. Original messages are combined with a vertical bar.
-
-    Args:
-        problems: A list of ProblemReport instances returned by the LLM.
-
-    Returns:
-        A new list of ProblemReport instances with grouped entries.
+    Groups problems by frequency.  Concatenates messages and recommendations,
+    and preserves the highest criticality.  If present, root_cause and
+    info_needed are combined.
     """
     grouped: dict[int, List[ProblemReport]] = defaultdict(list)
     for pr in problems:
         grouped[pr.frequency].append(pr)
-
     result: List[ProblemReport] = []
     for freq, items in grouped.items():
         if len(items) == 1:
             result.append(items[0])
             continue
-        combined_message = "; ".join([item.message for item in items])
-        combined_original = " | ".join([item.original_message for item in items if item.original_message]) or None
-        criticalities = [item.criticality for item in items]
+        combined_msg = "; ".join([it.message for it in items])
+        combined_orig = " | ".join([it.original_message for it in items if it.original_message]) or None
+        crits = [it.criticality for it in items]
         final_crit = 'низкая'
-        if 'высокая' in criticalities:
+        if 'высокая' in crits:
             final_crit = 'высокая'
-        elif 'средняя' in criticalities:
+        elif 'средняя' in crits:
             final_crit = 'средняя'
-        combined_recommendation = "\n\n".join([item.recommendation for item in items])
+        combined_rec = "\n\n".join([it.recommendation for it in items])
+        combined_root = "; ".join([it.root_cause for it in items if it.root_cause]) or None
+        combined_info = "; ".join([it.info_needed for it in items if it.info_needed]) or None
         result.append(ProblemReport(
-            message=combined_message,
-            original_message=combined_original,
+            message=combined_msg,
+            original_message=combined_orig,
             frequency=freq,
             criticality=final_crit,
-            recommendation=combined_recommendation,
+            recommendation=combined_rec,
+            root_cause=combined_root,
+            info_needed=combined_info,
         ))
     return result
 
@@ -73,55 +69,57 @@ async def analyze_log(file: UploadFile = File(...)):
         logger.exception("Ошибка при чтении файла: %s", ex)
         raise HTTPException(status_code=400, detail="Ошибка при чтении файла")
 
-    # Analyse logs via the agent pipeline
     entries = LogParser.parse_log(log_content)
     logger.info("Распарсено %d записей с уровнем WARN/ERROR", len(entries))
     grouped_entries = LogParser.group_by_normalized_message(entries)
     logger.info("Сгруппировано %d уникальных ошибок", len(grouped_entries))
-    classified_errors = ErrorClassifier.classify_errors(grouped_entries)
-    logger.info("После классификации получено %d ошибок", len(classified_errors))
+    classified = ErrorClassifier.classify_errors(grouped_entries)
+    logger.info("После классификации получено %d ошибок", len(classified))
 
-    # Build prompt for the LLM
-    prompt = PromptBuilder.build_prompt(classified_errors)
-    # Логируем полный промт, чтобы видеть, какие данные отправляются в GigaChat
+    # Build prompt (using whichever PromptBuilder is installed)
+    prompt = PromptBuilder.build_prompt(classified)
     logger.info("Промт для LLM:\n%s", prompt)
 
     gigachat = GigaChatClient()
-    # Запрашиваем ответ у LLM; если GigaChat вернул ошибку аутентификации или
-    # другую ошибку, возвращаем HTTP 502 с описанием
     try:
         response = await gigachat.get_completion(prompt)
     except Exception as e:
         logger.exception("Ошибка при вызове GigaChat: %s", e)
         raise HTTPException(status_code=502, detail=f"Ошибка при вызове GigaChat: {e}")
-    # Логируем ответ LLM для последующего анализа
     logger.info("Сырой ответ LLM (первые 1000 символов): %s", response[:1000])
 
-    validated_report = JSONParserValidator.parse_and_validate(response)
-    if not validated_report:
-        logger.error("Ответ LLM не валиден или пустой")
-        raise HTTPException(status_code=422, detail="Ответ LLM не валиден или пустой")
-    logger.info("Распарсено %d проблем из ответа LLM", len(validated_report))
-    # Выводим каждую полученную проблему для отладки
-    for pr in validated_report:
-        logger.info("Проблема: message='%s', frequency=%s, criticality=%s", pr.message, pr.frequency, pr.criticality)
-
-    # Map original messages from classified errors to the LLM responses
-    sorted_errors = sorted(classified_errors, key=lambda err: err.frequency, reverse=True)
-    for idx, problem in enumerate(validated_report):
+    validated = JSONParserValidator.parse_and_validate(response)
+    if not validated:
+        # If validation failed or LLM returned nothing, fallback to classified errors
+        logger.warning("Ответ LLM не валиден или пустой. Используем классификацию без рекомендаций.")
+        fallback_reports: List[ProblemReport] = []
+        for err in classified:
+            fallback_reports.append(ProblemReport(
+                message=err.message,
+                original_message=err.original_message,
+                frequency=err.frequency,
+                criticality=err.criticality,
+                recommendation="Не удалось получить рекомендации от LLM.",
+                root_cause=None,
+                info_needed=None,
+            ))
+        validated = fallback_reports
+    else:
+        logger.info("Распарсено %d проблем из ответа LLM", len(validated))
+        for pr in validated:
+            logger.info("Проблема: message='%s', frequency=%s, criticality=%s", pr.message, pr.frequency, pr.criticality)
+    # Map original messages to validated problems (by order of frequency)
+    sorted_errors = sorted(classified, key=lambda e: e.frequency, reverse=True)
+    for idx, pr in enumerate(validated):
         if idx < len(sorted_errors):
-            problem.original_message = sorted_errors[idx].original_message
+            pr.original_message = sorted_errors[idx].original_message
 
-    # Group problems by frequency to avoid duplicate rows with the same count
-    grouped_report = group_problems_by_frequency(validated_report)
-
+    grouped_report = group_problems_by_frequency(validated)
     json_report = ReportGenerator.generate_json_report(grouped_report)
-
     with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".csv", dir="app/reports") as tmp:
         csv_path = tmp.name
     ReportGenerator.generate_csv_report(grouped_report, csv_path)
     logger.info("CSV-отчёт сохранён: %s", csv_path)
-
     return {
         "report": json_report,
         "csv_url": f"/api/download-report?path={os.path.basename(csv_path)}",
