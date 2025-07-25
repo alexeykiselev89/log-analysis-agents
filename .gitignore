@@ -5,3 +5,8 @@ __pycache__/
 *.csv
 debug/
 venv/
+
+# Игнор мусора
+__pycache__/
+*.pyc
+venv/
