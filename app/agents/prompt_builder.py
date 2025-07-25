@@ -9,9 +9,9 @@ class PromptBuilder:
     def build_prompt(data: Union[dict, Iterable[ClassifiedError]]) -> str:
         """
         Build a prompt for the language model from either grouped log entries
-        (a mapping of normalized messages to lists of log entries) or an iterable
-        of ClassifiedError objects. Only the top 10 most frequent errors are
-        included to keep the prompt concise.
+        (a mapping of normalised messages to lists of log entries) or an
+        iterable of ClassifiedError objects. Only the top 10 most frequent
+        errors are included to keep the prompt concise.
 
         Args:
             data: Either a dictionary returned by LogParser.group_by_normalized_message
@@ -20,11 +20,10 @@ class PromptBuilder:
         Returns:
             A string containing the complete prompt to send to the LLM.
         """
-        # Normalize the input into a list of ClassifiedError objects
+        # Normalise the input into a list of ClassifiedError objects
         if isinstance(data, dict):
             classified_errors = ErrorClassifier.classify_errors(data)  # type: ignore[arg-type]
         else:
-            # Ensure we have a concrete list, not just a generator
             classified_errors = list(data)
 
         # Instructional preamble for the LLM. This text explains the role and
@@ -38,13 +37,13 @@ class PromptBuilder:
             "частоту появления и предварительную оценку критичности.\n"
             "Твоя задача для каждой ошибки:\n"
             "1. При необходимости скорректировать оценку критичности (низкая/средняя/высокая) с учётом контекста.\n"
-            "2. Кратко описать возможную первопричину возникновения проблемы: какие компоненты, конфигурации, таблицы, методы или внешние сервисы могут вызывать эту ошибку.\n"
-            "3. Сформулировать подробную и конкретную рекомендацию по устранению проблемы. Избегай общих фраз; перечисли конкретные шаги, которые должен выполнить инженер: какие классы, методы, таблицы, поля, индексы или параметры конфигурации нужно проверить, изменить или создать; какие команды выполнить; какие логи или конфигурации дополнительно изучить.\n"
-            "4. Если для точного диагноза недостаточно информации, укажи, какую дополнительную информацию нужно собрать (например, полный stacktrace, SQL-запрос или конфигурационный файл).\n\n"
-            "Верни ответ строго в виде JSON‑массива без какого‑либо поясняющего текста. "
+            "2. Используя пример сообщения (в том числе stacktrace), кратко описать возможную первопричину: какие компоненты, конфигурации, таблицы, методы или внешние сервисы могут вызывать эту ошибку.\n"
+            "3. Сформулировать подробную и конкретную рекомендацию по устранению проблемы. Избегай общих фраз; перечисли как минимум три чётких шага, которые должен выполнить инженер: какие классы, методы, таблицы, поля, индексы или параметры конфигурации нужно проверить, изменить или создать; какие команды выполнить; какие логи или конфигурации дополнительно изучить.\n"
+            "4. Если для точного диагноза недостаточно информации, укажи, какую дополнительную информацию нужно собрать (например, полный stacktrace, SQL‑запрос или конфигурационный файл).\n\n"
+            "Верни ответ строго в виде JSON‑массива без какого‑либо поясняющего текста и без комментариев `//`. "
             "Каждый элемент массива должен иметь следующие поля:\n"
             "    \"message\" — нормализованное описание ошибки;\n"
-            "    \"frequency\" — частота появления в логах;\n"
+            "    \"frequency\" — частота появления в логах (одно число);\n"
             "    \"criticality\" — окончательная оценка критичности (низкая/средняя/высокая);\n"
             "    \"recommendation\" — подробные конкретные шаги по исправлению (в виде одного текстового поля).\n\n"
             "Пример структуры ответа:\n"
@@ -59,14 +58,14 @@ class PromptBuilder:
             "]\n\n"
             "Ниже приведён список ошибок для анализа:\n"
             "\n"
-            "Важно: не добавляй комментариев (строки, начинающиеся с //) и лишних полей в JSON, и обязательно указывай частоту как одно целое число, без массивов.\n"
+            "Важно: не добавляй комментариев (строки, начинающиеся с //) и лишних полей в JSON, и обязательно указывай частоту как одно целое число.\n"
         )
 
         # Sort errors by descending frequency and limit to the top 10
         top_errors = sorted(classified_errors, key=lambda x: x.frequency, reverse=True)[:10]
 
         # Build the summary section that presents each error to the LLM. Including
-        # both the normalized message and an example original message provides
+        # both the normalised message and an example original message provides
         # additional context that improves the quality of the LLM's recommendations.
         logs_summary = ""
         for err in top_errors:

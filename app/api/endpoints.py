@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import List
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse
 from app.agents.log_parser import LogParser
 from app.agents.error_classifier import ErrorClassifier
 from app.agents.prompt_builder import PromptBuilder
@@ -26,8 +26,7 @@ def group_problems_by_frequency(problems: List[ProblemReport]) -> List[ProblemRe
     Aggregate problem reports with identical frequency values into a single
     report. When multiple entries share the same frequency, their messages
     and recommendations are concatenated, and the highest criticality level
-    (высокая > средняя > низкая) is preserved. The original messages are
-    combined using vertical bars.
+    is preserved. Original messages are combined with a vertical bar.
 
     Args:
         problems: A list of ProblemReport instances returned by the LLM.
@@ -44,17 +43,14 @@ def group_problems_by_frequency(problems: List[ProblemReport]) -> List[ProblemRe
         if len(items) == 1:
             result.append(items[0])
             continue
-        # Concatenate messages and recommendations
         combined_message = "; ".join([item.message for item in items])
         combined_original = " | ".join([item.original_message for item in items if item.original_message]) or None
-        # Determine the most severe criticality
         criticalities = [item.criticality for item in items]
         final_crit = 'низкая'
         if 'высокая' in criticalities:
             final_crit = 'высокая'
         elif 'средняя' in criticalities:
             final_crit = 'средняя'
-        # Concatenate recommendations separated by blank lines
         combined_recommendation = "\n\n".join([item.recommendation for item in items])
         result.append(ProblemReport(
             message=combined_message,
@@ -69,7 +65,6 @@ def group_problems_by_frequency(problems: List[ProblemReport]) -> List[ProblemRe
 @router.post("/analyze-log")
 async def analyze_log(file: UploadFile = File(...)):
     logger.info("Начат анализ загруженного лог-файла")
-    # Read the uploaded log file
     try:
         content = await file.read()
         log_content = content.decode("utf-8")
@@ -111,7 +106,6 @@ async def analyze_log(file: UploadFile = File(...)):
 
     json_report = ReportGenerator.generate_json_report(grouped_report)
 
-    # Generate a temporary CSV file
     with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".csv", dir="app/reports") as tmp:
         csv_path = tmp.name
     ReportGenerator.generate_csv_report(grouped_report, csv_path)
