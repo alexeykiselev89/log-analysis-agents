@@ -25,6 +25,7 @@ async def analyze_log(file: UploadFile = File(...)):
     entries = LogParser.parse_log(log_content)
     grouped_entries = LogParser.group_by_normalized_message(entries)
     classified_errors = ErrorClassifier.classify_errors(grouped_entries)
+    # Строим запрос на основе классифицированных ошибок
     prompt = PromptBuilder.build_prompt(classified_errors)
 
     gigachat = GigaChatClient()
@@ -34,9 +35,18 @@ async def analyze_log(file: UploadFile = File(...)):
     if not validated_report:
         raise HTTPException(status_code=422, detail="Ответ LLM не валиден или пустой")
 
+    # Сопоставляем исходные сообщения из классифицированных ошибок с ответами LLM.
+    # LLM формирует список в том же порядке, что и сообщения в запросе (отсортированные по частоте).
+    # Поэтому сортируем classified_errors по убыванию частоты, чтобы индексы совпадали.
+    sorted_errors = sorted(classified_errors, key=lambda err: err.frequency, reverse=True)
+    for idx, problem in enumerate(validated_report):
+        if idx < len(sorted_errors):
+            # Записываем исходное сообщение в отчёт
+            problem.original_message = sorted_errors[idx].original_message
+
     json_report = ReportGenerator.generate_json_report(validated_report)
 
-    # Генерируем временный CSV-файл
+    # Генерируем временный CSV‑файл
     with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".csv", dir="app/reports") as tmp:
         csv_path = tmp.name
     ReportGenerator.generate_csv_report(validated_report, csv_path)

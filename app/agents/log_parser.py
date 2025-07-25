@@ -4,29 +4,55 @@ from collections import defaultdict
 from datetime import datetime
 from app.models.log_entry import LogEntry
 
-# Обновлённый шаблон: поддерживает пробел в [WARN ] и необязательные поля
 LOG_PATTERN = re.compile(
-    r'(?P<timestamp>[\d\-]+\s[\d:,]+)\s\[(?P<level>[A-Z ]+)\]\s\[(?P<thread>[^\]]*)\]\s(?P<class>[\w\.]+):\s(?P<message>.+)'
+    r'^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) '
+    r'\[(?P<level>[A-Z]+)\] '
+    r'\[(?P<thread>[^\]]+)\] '
+    r'(?P<class>[^\:]+): (?P<message>.+)$'
 )
+
+ERROR_LEVELS = {"ERROR", "WARN", "EXCEPTION"}
 
 class LogParser:
     @staticmethod
     def parse_log(log_content: str) -> List[LogEntry]:
         entries = []
-        for line in log_content.strip().split("\n"):
+        buffer = ""
+        last_entry = None
+
+        lines = log_content.strip().splitlines()
+
+        for i, line in enumerate(lines):
+            line = line.strip()
+
+            # Если начинается новая строка лога
             match = LOG_PATTERN.match(line)
             if match:
-                try:
-                    entry = LogEntry(
-                        timestamp=datetime.strptime(match.group('timestamp'), '%Y-%m-%d %H:%M:%S,%f'),
-                        level=match.group('level').strip(),
-                        thread=match.group('thread'),
-                        class_name=match.group('class'),
-                        message=match.group('message').strip()
-                    )
-                    entries.append(entry)
-                except Exception as e:
-                    print(f"Ошибка парсинга строки: {line} — {e}")
+                level = match.group("level").upper()
+                if level not in ERROR_LEVELS:
+                    continue
+
+                if last_entry:
+                    entries.append(last_entry)
+
+                last_entry = LogEntry(
+                    timestamp=datetime.strptime(match.group("timestamp"), "%Y-%m-%d %H:%M:%S,%f"),
+                    level=level,
+                    thread=match.group("thread"),
+                    class_name=match.group("class"),
+                    message=match.group("message").strip()
+                )
+            elif last_entry and (line.startswith("at ") or line.startswith("Caused by") or line.startswith("org.")):
+                # Продолжение предыдущей ошибки (stacktrace)
+                last_entry.message += " " + line.strip()
+            else:
+                # Неизвестный формат — пропускаем
+                continue
+
+        if last_entry:
+            entries.append(last_entry)
+
+        print(f"🔎 [SUMMARY] Успешно распарсено строк: {len(entries)}")
         return entries
 
     @staticmethod
@@ -34,19 +60,24 @@ class LogParser:
         grouped = defaultdict(list)
         for entry in entries:
             normalized = LogParser.normalize_message(entry.message)
+            if normalized.lower() == "произошла ошибка":
+                print(f"⚠️  [SKIPPED] Строка содержит обобщённое сообщение: {entry.message}")
+                continue
             grouped[normalized].append(entry)
         return grouped
 
     @staticmethod
     def normalize_message(message: str) -> str:
-        """
-        Мягкая нормализация:
-        — убираем ID, UUID, числа больше 5 цифр (таймстемпы, значения, размеры)
-        — но оставляем смысл (ключевые слова, текст ошибок)
-        """
-        message = re.sub(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', '<UUID>', message)
-        message = re.sub(r'user_id=\d+', 'user_id=<ID>', message)
-        message = re.sub(r'order_id=\d+', 'order_id=<ID>', message)
-        message = re.sub(r'\b\d{5,}\b', '<NUM>', message)
-        message = re.sub(r'\b(duration|latency|timeout)=\d+ms\b', r'\1=<MS>', message)
-        return message.lower().strip()
+        # Сохраняем первые ключевые фразы (например, org.postgresql.PSQLException)
+        preserved = ""
+        if match := re.match(r'^(org\.[\w\.]+):', message):
+            preserved = match.group(1)
+
+        # Удаление ID, HASH, UUID и чисел
+        message = re.sub(r'[a-fA-F0-9\-]{36}', '<UUID>', message)
+        message = re.sub(r'\b\d{8,}\b', '<NUM>', message)
+        message = re.sub(r'[a-fA-F0-9]{32,}', '<HASH>', message)
+        message = re.sub(r'([a-zA-Z0-9_-]*id[a-zA-Z0-9_-]*)\s*=\s*[a-zA-Z0-9_-]+', r'\1=<ID>', message, flags=re.IGNORECASE)
+
+        result = preserved + ": " + message if preserved else message
+        return result.strip()

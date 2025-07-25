@@ -4,7 +4,17 @@ from typing import List
 from pydantic import BaseModel, ValidationError
 
 class ProblemReport(BaseModel):
+    """
+    Модель отчёта об одной проблеме, возвращаемого LLM.
+
+    Поле ``original_message`` заполняется после парсинга в эндпоинте ``analyze_log``
+    исходным текстом ошибки, чтобы его можно было отобразить в отчёте. LLM это
+    поле не возвращает, поэтому оно опционально.
+    """
+    # сообщение, сформулированное LLM (интерпретация)
     message: str
+    # исходная строка журнала (заполняется после парсинга)
+    original_message: str | None = None
     frequency: int
     criticality: str
     recommendation: str

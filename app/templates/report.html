@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -52,7 +51,8 @@
     <table>
         <thead>
             <tr>
-                <th>Сообщение</th>
+                <th>Оригинальное сообщение</th>
+                <th>Интерпретация (LLM)</th>
                 <th>Частота</th>
                 <th>Критичность</th>
                 <th>Рекомендация</th>
@@ -61,6 +61,7 @@
         <tbody>
             {% for item in parsed %}
             <tr>
+                <td>{{ item.original_message }}</td>
                 <td>{{ item.message }}</td>
                 <td>{{ item.frequency }}</td>
                 <td>
