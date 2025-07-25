@@ -83,17 +83,28 @@ async def analyze_log(file: UploadFile = File(...)):
 
     # Build prompt for the LLM
     prompt = PromptBuilder.build_prompt(classified_errors)
-    logger.debug("Промт для LLM:\n%s", prompt)
+    # Логируем полный промт, чтобы видеть, какие данные отправляются в GigaChat
+    logger.info("Промт для LLM:\n%s", prompt)
 
     gigachat = GigaChatClient()
-    response = await gigachat.get_completion(prompt)
-    logger.debug("Сырой ответ от LLM (первые 500 символов): %s", response[:500])
+    # Запрашиваем ответ у LLM; если GigaChat вернул ошибку аутентификации или
+    # другую ошибку, возвращаем HTTP 502 с описанием
+    try:
+        response = await gigachat.get_completion(prompt)
+    except Exception as e:
+        logger.exception("Ошибка при вызове GigaChat: %s", e)
+        raise HTTPException(status_code=502, detail=f"Ошибка при вызове GigaChat: {e}")
+    # Логируем ответ LLM для последующего анализа
+    logger.info("Сырой ответ LLM (первые 1000 символов): %s", response[:1000])
 
     validated_report = JSONParserValidator.parse_and_validate(response)
     if not validated_report:
         logger.error("Ответ LLM не валиден или пустой")
         raise HTTPException(status_code=422, detail="Ответ LLM не валиден или пустой")
     logger.info("Распарсено %d проблем из ответа LLM", len(validated_report))
+    # Выводим каждую полученную проблему для отладки
+    for pr in validated_report:
+        logger.info("Проблема: message='%s', frequency=%s, criticality=%s", pr.message, pr.frequency, pr.criticality)
 
     # Map original messages from classified errors to the LLM responses
     sorted_errors = sorted(classified_errors, key=lambda err: err.frequency, reverse=True)
