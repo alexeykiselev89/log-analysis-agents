@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -34,16 +33,17 @@
         <tbody>
             {% for item in parsed %}
             <tr>
-                <td>{{ item.original_message or '' | truncate(200, True, '…') }}</td>
+                <!-- обрезаем оригинальное сообщение не более чем до 200 символов, даже если оно пустое -->
+                <td>{{ (item.original_message or '') | truncate(200, True, '…') }}</td>
                 <td>{{ item.message }}</td>
                 <td>{{ item.frequency }}</td>
                 <td>
                     {% if item.criticality == 'высокая' %}
-                         <span class="high">высокая</span>
+                        <span class="high">высокая</span>
                     {% elif item.criticality == 'средняя' %}
-                         <span class="medium">средняя</span>
+                        <span class="medium">средняя</span>
                     {% else %}
-                         <span class="low">низкая</span>
+                        <span class="low">низкая</span>
                     {% endif %}
                 </td>
                 <td>{{ item.root_cause or '—' }}</td>
