@@ -3,7 +3,6 @@ from typing import Dict, List
 from app.models.log_entry import LogEntry
 from pydantic import BaseModel
 
-
 class ClassifiedError(BaseModel):
     """
     Представление классифицированной ошибки.
@@ -24,7 +23,6 @@ class ClassifiedError(BaseModel):
     class_name: str
     criticality: str
 
-
 class ErrorClassifier:
     """
     Классифицирует группы ошибок по уровню и частоте.
@@ -36,11 +34,14 @@ class ErrorClassifier:
     чтобы передать LLM больше контекста.
     """
 
+    # Базовое соответствие уровня логирования и оцененной критичности.
+    # Уровень DEBUG рассматривается как "низкая" критичность аналогично TRACE.
     LEVEL_CRITICALITY = {
         'ERROR': 'высокая',
         'WARN': 'средняя',
         'INFO': 'низкая',
         'TRACE': 'низкая',
+        'DEBUG': 'низкая',
     }
 
     @staticmethod
@@ -78,7 +79,15 @@ class ErrorClassifier:
                     seen.add(entry.message)
                 if len(examples) >= 5:
                     break
-            original_combined = "\n---\n".join(examples)
+                original_combined = "\n---\n".join(examples)
+
+                # Ограничиваем длину исходного сообщения, чтобы в отчёте
+                # отображалось не более 200 символов. Если сообщение длиннее,
+                # обрезаем его и добавляем многоточие. Это позволяет
+                # избежать вывода огромных стектрейсов.
+                max_len = 200
+                if len(original_combined) > max_len:
+                    original_combined = original_combined[:max_len] + "…"
 
             # Имя класса первой записи и количество повторов
             class_name = entries[0].class_name if entries else ""
@@ -102,13 +111,13 @@ class ErrorClassifier:
         """
         Возвращает наиболее приоритетный уровень из списка уровней.
 
-        Приоритет определяется в порядке: ``ERROR`` > ``WARN`` > ``INFO`` > ``TRACE``.  Если
-        ни один из этих уровней не найден, возвращается ``'INFO'``.
+        Приоритет определяется в порядке: ``ERROR`` > ``WARN`` > ``INFO`` > ``TRACE`` > ``DEBUG``.
+        Если ни один из этих уровней не найден, возвращается ``'INFO'``.
 
         :param levels: список уровней логирования, обнаруженных в группе.
         :return: строковое значение уровня с наивысшим приоритетом.
         """
-        priority_order = ['ERROR', 'WARN', 'INFO', 'TRACE']
+        priority_order = ['ERROR', 'WARN', 'INFO', 'TRACE', 'DEBUG']
         for lvl in priority_order:
             if lvl in levels:
                 return lvl
@@ -120,7 +129,7 @@ class ErrorClassifier:
         Корректирует критичность на основании уровня логирования и частоты:
         * для ERROR: > 50 повторов → высокая, иначе средняя;
         * для WARN: 51–200 → средняя, > 200 → высокая;
-        * INFO и TRACE остаются низкими.
+        * INFO, TRACE и DEBUG остаются низкими.
         """
         if level == 'ERROR':
             if frequency > 50:
@@ -132,4 +141,5 @@ class ErrorClassifier:
             if frequency > 50:
                 return 'средняя'
             return base_crit
+        # INFO, TRACE и DEBUG не повышают критичность
         return base_crit
