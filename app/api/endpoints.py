@@ -1,11 +1,12 @@
 """
-Модуль содержит HTTP‑эндпоинты API для анализа лог‑файлов и скачивания отчётов.
+    Модуль содержит HTTP‑эндпоинты API для анализа лог‑файлов и скачивания
+    отчётов.
 
-Эндпоинт `/analyze-log` принимает загруженный пользователем лог‑файл,
-извлекает важные записи, группирует и классифицирует их, запрашивает
-рекомендации у LLM и возвращает JSON‑отчёт вместе с путём для скачивания
-CSV. Эндпоинт `/download-report` отдаёт готовый CSV‑файл по имени.
-"""
+    Эндпоинт `/analyze-log` принимает загруженный пользователем лог‑файл,
+    извлекает важные записи, группирует и классифицирует их, запрашивает
+    рекомендации у LLM и возвращает JSON‑отчёт вместе с путём для скачивания
+    CSV. Эндпоинт `/download-report` отдаёт готовый CSV‑файл по имени.
+    """
 
 import os
 import tempfile
@@ -13,6 +14,7 @@ import aiofiles
 import logging
 from collections import defaultdict
 from typing import List
+import re
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
@@ -24,7 +26,6 @@ from app.agents.gigachat_client import GigaChatClient
 from app.agents.json_parser_validator import JSONParserValidator, ProblemReport
 from app.agents.report_generator import ReportGenerator
 
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -34,29 +35,124 @@ def group_problems_by_frequency(problems: List[ProblemReport]) -> List[ProblemRe
     """
     Группирует проблемы по частоте появления.
 
-    Соединяет сообщения и рекомендации и сохраняет наибольший
-    уровень критичности. Если присутствуют поля `root_cause` и
-    `info_needed`, они также объединяются.
+    При объединении нескольких записей с одинаковой частотой выполняются
+    следующие действия:
+
+    * Объединяются сообщения об ошибках, убирая дубли — итоговая строка
+      содержит уникальные сообщения, разделённые точкой с запятой.
+    * Объединяются оригинальные сообщения (если присутствуют), разделённые
+      вертикальной чертой.
+    * Критичность выбирается по максимальному уровню («высокая» >
+      «средняя» > «низкая»).
+    * Список рекомендаций преобразуется в единый упорядоченный список: из
+      каждой рекомендации извлекаются отдельные шаги (нумерованные строки),
+      номера удаляются, затем все шаги собираются в общую последовательность,
+      уникальные шаги сохраняются в исходном порядке и перенумеровываются
+      от 1 до N.
+    * Первопричины (`root_cause`) и требуемая информация (`info_needed`)
+      собираются в списки, дублирующиеся элементы удаляются.
     """
+
     grouped: dict[int, List[ProblemReport]] = defaultdict(list)
     for pr in problems:
         grouped[pr.frequency].append(pr)
+
     result: List[ProblemReport] = []
     for freq, items in grouped.items():
+        # Если только одна запись с такой частотой, возвращаем её как есть
         if len(items) == 1:
             result.append(items[0])
             continue
-        combined_msg = "; ".join([it.message for it in items])
-        combined_orig = " | ".join([it.original_message for it in items if it.original_message]) or None
+
+        # Объединяем сообщения и оставляем только уникальные
+        messages: List[str] = []
+        for it in items:
+            for msg in it.message.split(';'):
+                msg = msg.strip()
+                if msg and msg not in messages:
+                    messages.append(msg)
+        combined_msg = "; ".join(messages)
+
+        # Объединяем исходные сообщения без дубликатов
+        origs: List[str] = []
+        for it in items:
+            if it.original_message:
+                for part in it.original_message.split('|'):
+                    part = part.strip()
+                    if part and part not in origs:
+                        origs.append(part)
+        combined_orig = " | ".join(origs) if origs else None
+
+        # Определяем наибольший уровень критичности
         crits = [it.criticality for it in items]
         final_crit = 'низкая'
         if 'высокая' in crits:
             final_crit = 'высокая'
         elif 'средняя' in crits:
             final_crit = 'средняя'
-        combined_rec = "\n\n".join([it.recommendation for it in items])
-        combined_root = "; ".join([it.root_cause for it in items if it.root_cause]) or None
-        combined_info = "; ".join([it.info_needed for it in items if it.info_needed]) or None
+
+        # Собираем и перенумеровываем рекомендации
+        # В каждой рекомендации могут быть несколько шагов, разделённых точкой с запятой или переводом строки.
+        all_steps: List[str] = []
+        # Для удаления почти одинаковых шагов (например, "Проверьте" и "Проверить")
+        seen_keys: set[str] = set()
+        for it in items:
+            rec = it.recommendation or ''
+            # Разделяем по точке с запятой и переводам строк
+            parts = re.split(r'[;\n]+', rec)
+            for part in parts:
+                step = part.strip()
+                if not step:
+                    continue
+                # Удаляем ведущую нумерацию вида "1. " или "2." (с пробелом или без)
+                step = re.sub(r'^\d+\.\s*', '', step)
+                if not step:
+                    continue
+                # Формируем ключ для дедупликации: переводим в нижний регистр,
+                # убираем точки/запятые и снимаем некоторые окончания у слов.
+                lower = step.lower().rstrip('.').rstrip(',')
+                words = lower.split()
+                norm_words: list[str] = []
+                for w in words:
+                    base = w
+                    # Обрезаем наиболее частые суффиксы глаголов и причастий, чтобы унифицировать
+                    # формы типа «создайте/создать», «удалите/удалить», «проверьте/проверить».
+                    for suf in ('тесь', 'тесь', 'йтесь', 'итесь', 'итесь', 'йте', 'ите', 'ете', 'те', 'ть'):
+                        if base.endswith(suf) and len(base) > len(suf):
+                            base = base[:-len(suf)]
+                            break
+                    # Убираем мягкий знак и лишние ё/е для упрощения сравнения
+                    base = base.replace('ё', 'е').rstrip('ь')
+                    norm_words.append(base)
+                # Формируем ключ: склеиваем нормализованные слова и берём первые 25 символов
+                key = ''.join(norm_words)[:25]
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    all_steps.append(step)
+        # Создаём перенумерованный список
+        combined_rec = "\n".join([
+            f"{idx + 1}. {text}" for idx, text in enumerate(all_steps)
+        ]) if all_steps else ''
+
+        # Убираем дубликаты из root_cause и info_needed
+        root_causes: List[str] = []
+        for it in items:
+            if it.root_cause:
+                for rc in it.root_cause.split(';'):
+                    rc = rc.strip()
+                    if rc and rc not in root_causes:
+                        root_causes.append(rc)
+        combined_root = "; ".join(root_causes) if root_causes else None
+
+        info_needed_list: List[str] = []
+        for it in items:
+            if it.info_needed:
+                for info in it.info_needed.split(';'):
+                    info = info.strip()
+                    if info and info not in info_needed_list:
+                        info_needed_list.append(info)
+        combined_info = "; ".join(info_needed_list) if info_needed_list else None
+
         result.append(ProblemReport(
             message=combined_msg,
             original_message=combined_orig,
