@@ -4,44 +4,40 @@ from app.agents.error_classifier import ClassifiedError, ErrorClassifier
 
 
 class PromptBuilder:
-    """Utility for constructing prompts for the GigaChat LLM.
+    """
+    Утилита для построения промтов для языковой модели GigaChat.
 
-    This builder assembles an instruction prompt and a summary of the
-    classified errors.  It limits the number of included errors to the
-    top 10 by frequency to avoid token overflows.
-
-    The instructions have been revised to request additional fields
-    (`root_cause` and `info_needed`) and to demand a numbered list of
-    concrete actions in the `recommendation` field, so that an engineer
-    reading the report can follow clear steps.
+    Этот класс формирует инструкцию для LLM и сводку классифицированных
+    ошибок. Для предотвращения переполнения токенов включает только
+    десять наиболее частых ошибок. Инструкция требует от модели
+    заполнить дополнительные поля (`root_cause` и `info_needed`) и
+    выдать список конкретных действий в поле `recommendation`, чтобы
+    инженер мог легко следовать рекомендациям.
     """
 
     @staticmethod
     def build_prompt(data: Union[dict, Iterable[ClassifiedError]]) -> str:
         """
-        Build a prompt for the language model from either grouped log
-        entries or an iterable of ClassifiedError objects.
+        Создаёт текст промта для LLM на основе сгруппированных записей
+        логов или последовательности объектов `ClassifiedError`.
 
-        Args:
-            data: A mapping from normalised messages to lists of log
-                entries, or an iterable of ClassifiedError objects.
-
-        Returns:
-            A string containing the full prompt to send to the LLM.
+        :param data: либо словарь, где ключом является нормализованное
+            сообщение, а значением — список записей, либо итерируемая
+            коллекция `ClassifiedError`.
+        :return: строка с готовым промтом, которую можно отправить в LLM.
         """
-        # Normalise the input into a list of ClassifiedError objects
+        # Приводим вход к единому формату — списку объектов ClassifiedError
         if isinstance(data, dict):
             classified_errors = ErrorClassifier.classify_errors(data)  # type: ignore[arg-type]
         else:
             classified_errors = list(data)
 
-        # Instruction for the LLM.  We explicitly require the assistant
-        # to return a JSON array of objects with fields `message`,
-        # `frequency`, `criticality`, `root_cause`, `recommendation`, and
-        # `info_needed`.  The `recommendation` must be a numbered list of
-        # at least five concrete steps.  We also instruct the model to
-        # adjust criticality only when justified (e.g. frequency and log
-        # level suggest otherwise) and to explain why it did so.
+        # Инструкции для LLM. Мы требуем, чтобы ассистент вернул JSON-массив
+        # объектов с полями `message`, `frequency`, `criticality`,
+        # `root_cause`, `recommendation` и `info_needed`. `recommendation`
+        # должен быть нумерованным списком минимум из пяти шагов. Также
+        # объясняем, что критичность следует корректировать только при
+        # наличии оснований (частота, уровень лога).
         prompt_intro = (
             "Ты опытный инженер по разработке и эксплуатации backend‑"
             "приложений (например, Java/Spring). Тебе предоставлен список "
@@ -98,17 +94,20 @@ class PromptBuilder:
             "одно целое число.\n"
         )
 
-        # Sort errors by descending frequency and limit to the top 10
+        # Сортируем ошибки по убыванию частоты и берём не более 10 записей
         top_errors = sorted(classified_errors, key=lambda x: x.frequency, reverse=True)[:10]
 
-        # Compose a summary of the errors for the LLM
+        # Формируем сводку ошибок для LLM
         logs_summary = ""
         for err in top_errors:
+            # Если оригинальное сообщение состоит из нескольких примеров, используем множественное число
             example_message = err.original_message or err.message
             if '\n---\n' in example_message:
                 examples_label = "Примеры сообщений"
             else:
                 examples_label = "Пример сообщения"
+            # Добавляем сведения об ошибке: нормализованное сообщение, примеры, класс,
+            # частоту, уровень логирования и предварительную критичность
             logs_summary += (
                 f"- Ошибка: {err.message}\n"
                 f"  {examples_label}: {example_message}\n"

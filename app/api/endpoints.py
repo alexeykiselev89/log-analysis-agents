@@ -1,3 +1,12 @@
+"""
+Модуль содержит HTTP‑эндпоинты API для анализа лог‑файлов и скачивания отчётов.
+
+Эндпоинт `/analyze-log` принимает загруженный пользователем лог‑файл,
+извлекает важные записи, группирует и классифицирует их, запрашивает
+рекомендации у LLM и возвращает JSON‑отчёт вместе с путём для скачивания
+CSV. Эндпоинт `/download-report` отдаёт готовый CSV‑файл по имени.
+"""
+
 import os
 import tempfile
 import aiofiles
@@ -23,9 +32,11 @@ router = APIRouter()
 
 def group_problems_by_frequency(problems: List[ProblemReport]) -> List[ProblemReport]:
     """
-    Groups problems by frequency.  Concatenates messages and recommendations,
-    and preserves the highest criticality.  If present, root_cause and
-    info_needed are combined.
+    Группирует проблемы по частоте появления.
+
+    Соединяет сообщения и рекомендации и сохраняет наибольший
+    уровень критичности. Если присутствуют поля `root_cause` и
+    `info_needed`, они также объединяются.
     """
     grouped: dict[int, List[ProblemReport]] = defaultdict(list)
     for pr in problems:
@@ -60,23 +71,37 @@ def group_problems_by_frequency(problems: List[ProblemReport]) -> List[ProblemRe
 
 @router.post("/analyze-log")
 async def analyze_log(file: UploadFile = File(...)):
+    """
+    Обрабатывает загруженный лог‑файл: парсит записи, группирует и
+    классифицирует ошибки, запрашивает рекомендации у LLM и формирует
+    отчёт.
+
+    :param file: загруженный пользователем лог‑файл (UploadFile).
+    :return: словарь с полями ``report`` (JSON‑строка с отчётом) и
+        ``csv_url`` (URL для скачивания CSV‑отчёта).
+    """
     logger.info("Начат анализ загруженного лог-файла")
     try:
         content = await file.read()
+        # Читаем файл и получаем его содержимое в байтах
         log_content = content.decode("utf-8")
+        # Декодируем байты файла в строку
         logger.info("Получено %d байт логов", len(content))
     except Exception as ex:
         logger.exception("Ошибка при чтении файла: %s", ex)
         raise HTTPException(status_code=400, detail="Ошибка при чтении файла")
 
+    # Извлекаем только записи уровней WARN/ERROR
     entries = LogParser.parse_log(log_content)
     logger.info("Распарсено %d записей с уровнем WARN/ERROR", len(entries))
+    # Группируем записи по нормализованному сообщению
     grouped_entries = LogParser.group_by_normalized_message(entries)
     logger.info("Сгруппировано %d уникальных ошибок", len(grouped_entries))
+    # Классифицируем группы ошибок и определяем уровни критичности
     classified = ErrorClassifier.classify_errors(grouped_entries)
     logger.info("После классификации получено %d ошибок", len(classified))
 
-    # Build prompt (using whichever PromptBuilder is installed)
+    # Формируем промт для LLM с помощью PromptBuilder
     prompt = PromptBuilder.build_prompt(classified)
     logger.info("Промт для LLM:\n%s", prompt)
 
@@ -89,8 +114,10 @@ async def analyze_log(file: UploadFile = File(...)):
     logger.info("Сырой ответ LLM (первые 1000 символов): %s", response[:1000])
 
     validated = JSONParserValidator.parse_and_validate(response)
+    # Парсим и валидируем JSON‑ответ LLM
     if not validated:
-        # If validation failed or LLM returned nothing, fallback to classified errors
+        # Если валидация не удалась или LLM вернул пустой ответ,
+        # используем классификацию без рекомендаций
         logger.warning("Ответ LLM не валиден или пустой. Используем классификацию без рекомендаций.")
         fallback_reports: List[ProblemReport] = []
         for err in classified:
@@ -108,17 +135,20 @@ async def analyze_log(file: UploadFile = File(...)):
         logger.info("Распарсено %d проблем из ответа LLM", len(validated))
         for pr in validated:
             logger.info("Проблема: message='%s', frequency=%s, criticality=%s", pr.message, pr.frequency, pr.criticality)
-    # Map original messages to validated problems (by order of frequency)
+    # Назначаем исходные сообщения в соответствии с убыванием частоты
     sorted_errors = sorted(classified, key=lambda e: e.frequency, reverse=True)
     for idx, pr in enumerate(validated):
         if idx < len(sorted_errors):
             pr.original_message = sorted_errors[idx].original_message
 
+    # Группируем проблемы по частоте, объединяя сообщения и рекомендации
     grouped_report = group_problems_by_frequency(validated)
     json_report = ReportGenerator.generate_json_report(grouped_report)
+    # Генерируем JSON‑отчёт из списка проблем
     with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".csv", dir="app/reports") as tmp:
         csv_path = tmp.name
     ReportGenerator.generate_csv_report(grouped_report, csv_path)
+    # Сохраняем CSV‑отчёт в файл
     logger.info("CSV-отчёт сохранён: %s", csv_path)
     return {
         "report": json_report,
@@ -128,6 +158,12 @@ async def analyze_log(file: UploadFile = File(...)):
 
 @router.get("/download-report")
 async def download_report(path: str):
+    """
+    Возвращает CSV‑файл отчёта по указанному имени файла.
+
+    :param path: имя CSV‑файла в каталоге ``app/reports``.
+    :raises HTTPException: если файл не найден.
+    """
     csv_full_path = os.path.join("app/reports", path)
     if not os.path.exists(csv_full_path):
         raise HTTPException(status_code=404, detail="Файл не найден")

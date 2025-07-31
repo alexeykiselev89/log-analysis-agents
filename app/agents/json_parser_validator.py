@@ -41,11 +41,11 @@ class JSONParserValidator:
         print(response)
         print("-----------------------------------")
 
-        # Remove control characters
+        # Удаляем управляющие символы, которые могут мешать парсингу
         response = re.sub(r'[\x00-\x1F\x7F]+', '', response)
-        # Remove code fences like ```json
+        # Убираем markdown‑обрамление вида ``` и ```json
         response = re.sub(r'```(?:json)?', '', response)
-        # Remove inline comments starting with //
+        # Удаляем однострочные комментарии, начинающиеся с //
         response = re.sub(r'//.*?(?:\r?\n|$)', '', response)
 
         start_idx = response.find('[')
@@ -57,48 +57,54 @@ class JSONParserValidator:
     @staticmethod
     def parse_and_validate(response: str) -> List[ProblemReport]:
         """
-        Parses and validates the LLM response. Attempts to correct common
-        formatting issues and aggregates list‑based frequency values. Falls back
-        to markdown parsing if JSON cannot be recovered.
+        Разбирает и валидирует JSON‑ответ, возвращённый LLM.
+
+        Метод пытается восстановить корректный JSON: преобразует элементы,
+        представленные списками, в словари, объединяет списковые значения
+        частоты в одно число, а рекомендации в виде списка — в строку
+        (разделяя элементы переводом строки). Если парсинг JSON не
+        удаётся, управление передаётся методу `parse_markdown()`.
         """
         clean_response = JSONParserValidator.clean_json_response(response)
         if clean_response:
             try:
-                # Decode JSON into Python objects
+                # Декодируем JSON‑массив в список Python‑объектов
                 data: List[Any] = json.loads(clean_response)
                 normalized: List[dict[str, Any]] = []
                 for raw_item in data:
-                    # If the item is a list (e.g., returned by LLM as
-                    # [msg, freq, crit, rec]) convert to dict
+                    # Если элемент — список (например, [msg, freq, crit, rec]),
+                    # конвертируем его в словарь с ожидаемыми полями.
                     if not isinstance(raw_item, dict) and isinstance(raw_item, (list, tuple)):
-                        # We expect at least 4 items: message, frequency,
-                        # criticality, recommendation. Optional positions 4 and 5
-                        # can contain root_cause and info_needed.
+                        # Ожидается минимум 4 элемента: сообщение, частота,
+                        # критичность и рекомендация. Пятый и шестой элементы
+                        # (если есть) трактуются как root_cause и info_needed.
                         if len(raw_item) >= 4:
-                            # Pre-fill dict
+                            # Создаём словарь с основными полями
                             item = {
                                 "message": raw_item[0],
                                 "frequency": raw_item[1],
                                 "criticality": raw_item[2],
                                 "recommendation": raw_item[3],
                             }
+                            # Опциональные значения
                             if len(raw_item) > 4:
                                 item["root_cause"] = raw_item[4]
                             if len(raw_item) > 5:
                                 item["info_needed"] = raw_item[5]
                         else:
-                            # Skip malformed items
+                            # Пропускаем некорректные элементы
                             continue
                     elif isinstance(raw_item, dict):
+                        # Если уже словарь, делаем копию
                         item = raw_item.copy()
                     else:
-                        # Skip unknown structures
+                        # Пропускаем неизвестные структуры
                         continue
-                    # Flatten recommendation lists
+                    # Если рекомендация — список, объединяем элементы в одну строку
                     rec = item.get("recommendation")
                     if isinstance(rec, list):
                         item["recommendation"] = "\n".join(str(r) for r in rec)
-                    # Aggregate frequency lists
+                    # Если частота — список, агрегируем значения (суммируем или берём длину)
                     freq = item.get("frequency")
                     if isinstance(freq, list):
                         try:
@@ -106,7 +112,9 @@ class JSONParserValidator:
                             item["frequency"] = sum(numeric_values) if numeric_values else len(freq)
                         except Exception:
                             item["frequency"] = len(freq)
+                    # Добавляем нормализованную запись в список
                     normalized.append(item)
+                # Конструируем объекты Pydantic
                 return [ProblemReport(**item) for item in normalized]
             except (json.JSONDecodeError, ValidationError) as e:
                 print(f"❌ Ошибка парсинга JSON: {e}")
@@ -159,7 +167,15 @@ class JSONParserValidator:
     @staticmethod
     def parse_markdown(response: str) -> List[ProblemReport]:
         """
-        Parses markdown‑formatted responses when JSON cannot be extracted.
+        Разбирает ответ LLM в формате markdown, когда корректный JSON извлечь не удалось.
+
+        Ожидается, что каждая проблема начинается с заголовка вида
+        ``"#### Ошибка №N:"``. Из каждого блока извлекаются:
+
+        - сообщение (внутри обратных кавычек);
+        - частота появления (``Частота: X``);
+        - уровень критичности (``Критичность: ...``);
+        - рекомендации (текст после ``Рекомендации:`` до следующего блока).
         """
         errors: List[ProblemReport] = []
         blocks = re.split(r'#### Ошибка №\d+:', response)
