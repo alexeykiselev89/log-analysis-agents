@@ -33,7 +33,7 @@
         <tbody>
             {% for item in parsed %}
             <tr>
-                <td>{{ item.original_message | truncate(200, True, '…') }}</td>
+                <td>{{ item.original_message or '' | truncate(200, True, '…') }}</td>
                 <td>{{ item.message }}</td>
                 <td>{{ item.frequency }}</td>
                 <td>
