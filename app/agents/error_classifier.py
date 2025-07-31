@@ -79,15 +79,19 @@ class ErrorClassifier:
                     seen.add(entry.message)
                 if len(examples) >= 5:
                     break
-                original_combined = "\n---\n".join(examples)
 
-                # Ограничиваем длину исходного сообщения, чтобы в отчёте
-                # отображалось не более 200 символов. Если сообщение длиннее,
-                # обрезаем его и добавляем многоточие. Это позволяет
-                # избежать вывода огромных стектрейсов.
-                max_len = 200
-                if len(original_combined) > max_len:
-                    original_combined = original_combined[:max_len] + "…"
+            # Объединяем примеры в одно поле. Используем `---` как разделитель,
+            # чтобы затем можно было восстановить отдельные сообщения при
+            # группировке отчёта.
+            original_combined = "\n---\n".join(examples)
+
+            # Ограничиваем длину исходного сообщения, чтобы в отчёте
+            # отображалось не более 200 символов. Если сообщение длиннее,
+            # обрезаем его и добавляем многоточие. Это позволяет
+            # избежать вывода огромных стектрейсов.
+            max_len = 200
+            if len(original_combined) > max_len:
+                original_combined = original_combined[:max_len] + "…"
 
             # Имя класса первой записи и количество повторов
             class_name = entries[0].class_name if entries else ""
