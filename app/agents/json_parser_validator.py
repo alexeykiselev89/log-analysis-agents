@@ -1,4 +1,3 @@
-
 import json
 import re
 from typing import List, Any
@@ -29,6 +28,16 @@ class ProblemReport(BaseModel):
 
 
 class JSONParserValidator:
+    """
+    Улучшенный парсер и валидатор JSON‑ответа от LLM.
+
+    Этот класс пытается извлечь массив объектов из сырой строки,
+    очищает от markdown‑обёрток и управляющих символов, удаляет
+    комментарии и лишние запятые, а затем валидирует полученные
+    элементы. Если разобрать JSON не удаётся, он пробует извлечь
+    отдельные объекты и валидирует их по одному.
+    """
+
     @staticmethod
     def clean_json_response(response: str) -> str:
         """
@@ -38,10 +47,6 @@ class JSONParserValidator:
         Комментарии (строки, начинающиеся с `//`) удаляются, поскольку
         стандарт JSON их не допускает.
         """
-        print("----- СЫРОЙ ОТВЕТ ОТ GIGACHAT -----")
-        print(response)
-        print("-----------------------------------")
-
         # Удаляем управляющие символы, которые могут мешать парсингу
         response = re.sub(r'[\x00-\x1F\x7F]+', '', response)
         # Убираем markdown‑обрамление вида ``` и ```json
@@ -64,48 +69,40 @@ class JSONParserValidator:
         представленные списками, в словари, объединяет списковые значения
         частоты в одно число, а рекомендации в виде списка — в строку
         (разделяя элементы переводом строки). Если парсинг JSON не
-        удаётся, управление передаётся методу `parse_markdown()`.
+        удаётся, извлекает отдельные объекты из строки и валидирует их
+        по одному.
         """
         clean_response = JSONParserValidator.clean_json_response(response)
         if clean_response:
+            # Первой попытка: загрузить как список целиком
             try:
-                # Декодируем JSON‑массив в список Python‑объектов
                 data: List[Any] = json.loads(clean_response)
                 normalized: List[dict[str, Any]] = []
                 for raw_item in data:
-                    # Если элемент — список (например, [msg, freq, crit, rec]),
-                    # конвертируем его в словарь с ожидаемыми полями.
                     if not isinstance(raw_item, dict) and isinstance(raw_item, (list, tuple)):
-                        # Ожидается минимум 4 элемента: сообщение, частота,
-                        # критичность и рекомендация. Пятый и шестой элементы
-                        # (если есть) трактуются как root_cause и info_needed.
+                        # Конвертируем списковый элемент в словарь
                         if len(raw_item) >= 4:
-                            # Создаём словарь с основными полями
                             item = {
                                 "message": raw_item[0],
                                 "frequency": raw_item[1],
                                 "criticality": raw_item[2],
                                 "recommendation": raw_item[3],
                             }
-                            # Опциональные значения
                             if len(raw_item) > 4:
                                 item["root_cause"] = raw_item[4]
                             if len(raw_item) > 5:
                                 item["info_needed"] = raw_item[5]
                         else:
-                            # Пропускаем некорректные элементы
                             continue
                     elif isinstance(raw_item, dict):
-                        # Если уже словарь, делаем копию
                         item = raw_item.copy()
                     else:
-                        # Пропускаем неизвестные структуры
                         continue
-                    # Если рекомендация — список, объединяем элементы в одну строку
+                    # Объединяем список рекомендаций в строку
                     rec = item.get("recommendation")
                     if isinstance(rec, list):
                         item["recommendation"] = "\n".join(str(r) for r in rec)
-                    # Если частота — список, агрегируем значения (суммируем или берём длину)
+                    # Агрегируем список частоты
                     freq = item.get("frequency")
                     if isinstance(freq, list):
                         try:
@@ -113,85 +110,54 @@ class JSONParserValidator:
                             item["frequency"] = sum(numeric_values) if numeric_values else len(freq)
                         except Exception:
                             item["frequency"] = len(freq)
-                    # Добавляем нормализованную запись в список
                     normalized.append(item)
-                # Конструируем объекты Pydantic
                 return [ProblemReport(**item) for item in normalized]
-            except (json.JSONDecodeError, ValidationError) as e:
-                print(f"❌ Ошибка парсинга JSON: {e}")
-                fixed = clean_response.strip()
-                fixed = re.sub(r',\s*\]$', ']', fixed)
-                fixed = re.sub(r',\s*\}$', '}', fixed)
-                if fixed and not fixed.endswith(']'):
-                    fixed = fixed + ']'
-                try:
-                    data = json.loads(fixed)
-                    for item in data:
-                        rec = item.get("recommendation")
-                        if isinstance(rec, list):
-                            item["recommendation"] = "\n".join(str(r) for r in rec)
-                        freq = item.get("frequency")
-                        if isinstance(freq, list):
-                            try:
-                                numeric_values = [int(v) for v in freq if isinstance(v, (int, float, str))]
-                                item["frequency"] = sum(numeric_values) if numeric_values else len(freq)
-                            except Exception:
-                                item["frequency"] = len(freq)
-                    return [ProblemReport(**item) for item in data]
-                except Exception as e2:
-                    print(f"⚠️ Не удалось корректировать JSON: {e2}")
-                    reports: List[ProblemReport] = []
-                    for obj_str in re.findall(r'\{[^\{\}]*\}', clean_response):
-                        try:
-                            obj_data = json.loads(obj_str)
-                            rec = obj_data.get("recommendation")
-                            if isinstance(rec, list):
-                                obj_data["recommendation"] = "\n".join(str(r) for r in rec)
-                            freq = obj_data.get("frequency")
-                            if isinstance(freq, list):
-                                try:
-                                    numeric_values = [int(v) for v in freq if isinstance(v, (int, float, str))]
-                                    obj_data["frequency"] = sum(numeric_values) if numeric_values else len(freq)
-                                except Exception:
-                                    obj_data["frequency"] = len(freq)
-                            reports.append(ProblemReport(**obj_data))
-                        except Exception:
-                            continue
-                    if reports:
-                        return reports
-                    print("⚠️ Переходим к парсингу markdown-формата")
-                    return JSONParserValidator.parse_markdown(response)
+            except (json.JSONDecodeError, ValidationError):
+                pass
 
-        print("⚠️ JSON не найден — пробуем распарсить markdown-формат")
-        return JSONParserValidator.parse_markdown(response)
-
-    @staticmethod
-    def parse_markdown(response: str) -> List[ProblemReport]:
-        """
-        Разбирает ответ LLM в формате markdown, когда корректный JSON извлечь не удалось.
-
-        Ожидается, что каждая проблема начинается с заголовка вида
-        ``"#### Ошибка №N:"``. Из каждого блока извлекаются:
-
-        - сообщение (внутри обратных кавычек);
-        - частота появления (``Частота: X``);
-        - уровень критичности (``Критичность: ...``);
-        - рекомендации (текст после ``Рекомендации:`` до следующего блока).
-        """
-        errors: List[ProblemReport] = []
-        blocks = re.split(r'#### Ошибка №\d+:', response)
-        for block in blocks[1:]:
+            # Вторая попытка: удаляем запятые перед закрывающими скобками
+            fixed = clean_response.strip()
+            fixed = re.sub(r',\s*\]', ']', fixed)
+            fixed = re.sub(r',\s*\}', '}', fixed)
             try:
-                msg_match = re.search(r'`([^`]+)`', block)
-                freq_match = re.search(r'Частота:\s*(\d+)', block)
-                crit_match = re.search(r'Критичность:\s*(\w+)', block, re.IGNORECASE)
-                rec_match = re.search(r'Рекомендации:\s*[-•]?\s*(.*?)\n\n', block, re.DOTALL)
-                errors.append(ProblemReport(
-                    message=msg_match.group(1) if msg_match else "Неизвестно",
-                    frequency=int(freq_match.group(1)) if freq_match else 1,
-                    criticality=crit_match.group(1).lower() if crit_match else "низкая",
-                    recommendation=rec_match.group(1).strip() if rec_match else "—",
-                ))
+                data = json.loads(fixed)
+                for item in data:
+                    rec = item.get("recommendation")
+                    if isinstance(rec, list):
+                        item["recommendation"] = "\n".join(str(r) for r in rec)
+                    freq = item.get("frequency")
+                    if isinstance(freq, list):
+                        try:
+                            numeric_values = [int(v) for v in freq if isinstance(v, (int, float, str))]
+                            item["frequency"] = sum(numeric_values) if numeric_values else len(freq)
+                        except Exception:
+                            item["frequency"] = len(freq)
+                return [ProblemReport(**item) for item in data]
             except Exception:
-                continue
-        return errors
+                pass
+
+            # Третья попытка: парсим отдельно каждую JSON‑структуру
+            reports: List[ProblemReport] = []
+            for obj_str in re.findall(r'\{[^\{\}]*\}', clean_response):
+                try:
+                    # Удаляем запятые перед закрывающими скобками и скобками
+                    obj_clean = re.sub(r',\s*([}\]])', r'\1', obj_str)
+                    obj_data = json.loads(obj_clean)
+                    rec = obj_data.get("recommendation")
+                    if isinstance(rec, list):
+                        obj_data["recommendation"] = "\n".join(str(r) for r in rec)
+                    freq = obj_data.get("frequency")
+                    if isinstance(freq, list):
+                        try:
+                            numeric_values = [int(v) for v in freq if isinstance(v, (int, float, str))]
+                            obj_data["frequency"] = sum(numeric_values) if numeric_values else len(freq)
+                        except Exception:
+                            obj_data["frequency"] = len(freq)
+                    reports.append(ProblemReport(**obj_data))
+                except Exception:
+                    continue
+            if reports:
+                return reports
+
+        # Если ничего не удалось распарсить, возвращаем пустой список
+        return []
